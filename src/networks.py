@@ -122,7 +122,7 @@ class Dis(nn.Module):
 # ---------------------------- Encoders -----------------------------
 ####################################################################
 '''
-    内容编码器
+    内容编码器，为什么会含有共享部分呢？是因为希望他们共享高层特征，例如眼睛、鼻子、耳朵的位置
     实际结构：
         ------------A与B独立部分------------
         conv7@64 + LeakyReLU
@@ -168,7 +168,7 @@ class E_content(nn.Module):
         self.convB = nn.Sequential(*encB_c)
 
     def forward(self, xa, xb):
-        outputA = self.convA(xa)
+        outputA = self.convA(xa)    #   b,256,54,54
         outputB = self.convB(xb)
         outputA = self.conv_share(outputA)
         outputB = self.conv_share(outputB)

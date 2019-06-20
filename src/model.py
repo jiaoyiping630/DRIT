@@ -220,12 +220,22 @@ class DRIT(nn.Module):
         # get encoded z_c
         self.z_content_a, self.z_content_b = self.enc_c.forward(self.real_A_encoded, self.real_B_encoded)
 
+    '''
+        更新内容判别器
+    '''
     def update_D_content(self, image_a, image_b):
         self.input_A = image_a
         self.input_B = image_b
         self.forward_content()
+        '''
+            batch_size默认的是两类各两张真图，在前向传播时候，各传播一张真A和真B的图，
+            经过内容编码器enc_c，把结果存在self.z_content_a和self.z_content_b中
+        '''
         self.disContent_opt.zero_grad()
         loss_D_Content = self.backward_contentD(self.z_content_a, self.z_content_b)
+        '''
+            
+        '''
         self.disContent_loss = loss_D_Content.item()
         nn.utils.clip_grad_norm_(self.disContent.parameters(), 5)
         self.disContent_opt.step()
@@ -288,7 +298,7 @@ class DRIT(nn.Module):
         return loss_D
 
     def backward_contentD(self, imageA, imageB):
-        pred_fake = self.disContent.forward(imageA.detach())
+        pred_fake = self.disContent.forward(imageA.detach())    #   将内容编码送给内容判别器，得到两个预测值
         pred_real = self.disContent.forward(imageB.detach())
         for it, (out_a, out_b) in enumerate(zip(pred_fake, pred_real)):
             out_fake = nn.functional.sigmoid(out_a)
@@ -477,7 +487,7 @@ class DRIT(nn.Module):
             'enc_c': self.enc_c.state_dict(),
             'enc_a': self.enc_a.state_dict(),
             'gen': self.gen.state_dict(),
-            'disA_opt': self.disA_opt.state_dict(),
+            'disA_opt': self.disA_opt.state_dict(), #   原来优化器的状态也可以通过state_dict()来获取并保存啊！
             'disA2_opt': self.disA2_opt.state_dict(),
             'disB_opt': self.disB_opt.state_dict(),
             'disB2_opt': self.disB2_opt.state_dict(),
