@@ -18,10 +18,11 @@ class Dis_content(nn.Module):
     def __init__(self):
         super(Dis_content, self).__init__()
         model = []
-        model += [LeakyReLUConv2d(256, 256, kernel_size=7, stride=2, padding=1, norm='Instance')]
-        model += [LeakyReLUConv2d(256, 256, kernel_size=7, stride=2, padding=1, norm='Instance')]
-        model += [LeakyReLUConv2d(256, 256, kernel_size=7, stride=2, padding=1, norm='Instance')]
-        model += [LeakyReLUConv2d(256, 256, kernel_size=4, stride=1, padding=0)]
+        #   注：LeakyReLUConv2d的默认参数：n_in, n_out, kernel_size, stride, padding=0, norm='None'
+        model += [LeakyReLUConv2d(n_in=256, n_out=256, kernel_size=7, stride=2, padding=1, norm='Instance')]
+        model += [LeakyReLUConv2d(n_in=256, n_out=256, kernel_size=7, stride=2, padding=1, norm='Instance')]
+        model += [LeakyReLUConv2d(n_in=256, n_out=256, kernel_size=7, stride=2, padding=1, norm='Instance')]
+        model += [LeakyReLUConv2d(n_in=256, n_out=256, kernel_size=4, stride=1, padding=0)]
         model += [nn.Conv2d(256, 1, kernel_size=1, stride=1, padding=0)]
         self.model = nn.Sequential(*model)
 
@@ -33,26 +34,40 @@ class Dis_content(nn.Module):
         return outs
 
 
+'''多尺度判别器'''
+
+
 class MultiScaleDis(nn.Module):
     def __init__(self, input_dim, n_scale=3, n_layer=4, norm='None', sn=False):
         super(MultiScaleDis, self).__init__()
-        ch = 64
+        ch = 64  # 滤波器基数为64，按64,128,256,512，共4层设计
         self.downsample = nn.AvgPool2d(3, stride=2, padding=1, count_include_pad=False)
         self.Diss = nn.ModuleList()
         for _ in range(n_scale):
             self.Diss.append(self._make_net(ch, input_dim, n_layer, norm, sn))
 
+    '''
+        make_net的作用似乎是返回一个序列模型，输入参数分别为：
+            ch：滤波器基数（随着层深自动倍增）
+            input_dim：输入通道数
+            n_layer：层的数目
+            norm：使用的归一化
+            sn：是否使用谱归一化
+            在最后一步，通过1x1的卷积，输出特征图的通道数也变为了1
+        真正的判别器是self.Diss，在前向传播时分别按1x，2x，4x降采样，然后送到三个不同分辨率的判别器中，并把输出并起来
+    '''
+
     def _make_net(self, ch, input_dim, n_layer, norm, sn):
         model = []
-        model += [LeakyReLUConv2d(input_dim, ch, 4, 2, 1, norm, sn)]
+        model += [LeakyReLUConv2d(n_in=input_dim, n_out=ch, kernel_size=4, stride=2, padding=1, norm=norm, sn=sn)]
         tch = ch
         for _ in range(1, n_layer):
-            model += [LeakyReLUConv2d(tch, tch * 2, 4, 2, 1, norm, sn)]
+            model += [LeakyReLUConv2d(n_in=tch, n_out=tch * 2, kernel_size=4, stride=2, padding=1, norm=norm, sn=sn)]
             tch *= 2
         if sn:
             model += [spectral_norm(nn.Conv2d(tch, 1, 1, 1, 0))]
         else:
-            model += [nn.Conv2d(tch, 1, 1, 1, 0)]
+            model += [nn.Conv2d(in_channels=tch, out_channels=1, kernel_size=1, stride=1, padding=0)]
         return nn.Sequential(*model)
 
     def forward(self, x):
@@ -61,6 +76,13 @@ class MultiScaleDis(nn.Module):
             outs.append(Dis(x))
             x = self.downsample(x)
         return outs
+
+
+'''
+    判别器
+        make_net和前面一样，经过堆叠，最后输出经1x1的卷积，压缩成单通道
+        在前向传播时，返回的结果是经过处理的单通道特征图的展平。
+'''
 
 
 class Dis(nn.Module):
@@ -99,6 +121,22 @@ class Dis(nn.Module):
 ####################################################################
 # ---------------------------- Encoders -----------------------------
 ####################################################################
+'''
+    内容编码器
+    实际结构：
+        ------------A与B独立部分------------
+        conv7@64 + LeakyReLU
+        conv3@128/2 + IN + ReLU
+        conv3@256/2 + IN + ReLU
+        conv3@256 + IN + ReLU + conv3@256 + IN (with Residual)
+        conv3@256 + IN + ReLU + conv3@256 + IN (with Residual)
+        conv3@256 + IN + ReLU + conv3@256 + IN (with Residual)
+        ------------A与B共享部分------------
+        conv3@256 + IN + ReLU + conv3@256 + IN (with Residual)
+        GaussianNoiseLayer
+'''
+
+
 class E_content(nn.Module):
     def __init__(self, input_dim_a, input_dim_b):
         super(E_content, self).__init__()
@@ -147,6 +185,19 @@ class E_content(nn.Module):
         return outputB
 
 
+'''
+    属性编码器：
+        conv7@64 + ReLU
+        conv4@128/2 + ReLU
+        conv4@256/2 + ReLU
+        conv4@256/2 + ReLU
+        conv4@256/2 + ReLU
+        AdaptiveAvgPool2d <- 因为参数为1，所以相当于全局均值池化（参数为几，最后的尺寸就是几）
+        conv1@c
+    整个模块的输出是1x1x8的东西
+'''
+
+
 class E_attr(nn.Module):
     def __init__(self, input_dim_a, input_dim_b, output_nc=8):
         super(E_attr, self).__init__()
@@ -185,8 +236,8 @@ class E_attr(nn.Module):
             nn.ReflectionPad2d(1),
             nn.Conv2d(dim * 4, dim * 4, 4, 2),
             nn.ReLU(inplace=True),
-            nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(dim * 4, output_nc, 1, 1, 0))
+            nn.AdaptiveAvgPool2d(1),  # 256,1,1
+            nn.Conv2d(dim * 4, output_nc, 1, 1, 0))  # 8,1,1
         return
 
     def forward(self, xa, xb):
@@ -207,22 +258,36 @@ class E_attr(nn.Module):
         return output_B
 
 
+'''
+    这好像是属性编码器的另一种选择，而且是默认的，help解释中叫做：
+        concatenate attribute features for translation, set 0 for using feature-wise transform
+    架构：
+        conv4@64/2
+        Residual Block x 3
+
+    注：其中BasicBlock架构为：
+        归一化+非线性+3x3卷积（in_channel）+归一化+非线性+conv（out_channel）+meanpool
+        残差连接（in_channel-> meanpool+conv -> out_channel），特征图通过该模块，尺寸大约缩小2倍
+'''
+
+
 class E_attr_concat(nn.Module):
     def __init__(self, input_dim_a, input_dim_b, output_nc=8, norm_layer=None, nl_layer=None):
         super(E_attr_concat, self).__init__()
 
-        ndf = 64
-        n_blocks = 4
+        ndf = 64  # 这是滤波器的基数，后面会按64,128,192,256增长，最后倍率会被max_ndf限制住
+        n_blocks = 4  # 这个是模块的数目
         max_ndf = 4
 
         conv_layers_A = [nn.ReflectionPad2d(1)]
         conv_layers_A += [nn.Conv2d(input_dim_a, ndf, kernel_size=4, stride=2, padding=0, bias=True)]
+        #   这里的通道数不是倍增的，而是线性增长的
         for n in range(1, n_blocks):
             input_ndf = ndf * min(max_ndf, n)  # 2**(n-1)
             output_ndf = ndf * min(max_ndf, n + 1)  # 2**n
             conv_layers_A += [BasicBlock(input_ndf, output_ndf, norm_layer, nl_layer)]
-        conv_layers_A += [nl_layer(), nn.AdaptiveAvgPool2d(1)]  # AvgPool2d(13)
-        self.fc_A = nn.Sequential(*[nn.Linear(output_ndf, output_nc)])
+        conv_layers_A += [nl_layer(), nn.AdaptiveAvgPool2d(1)]  # AvgPool2d(13) #   到这里，维度是output_ndf = 256，尺寸是1
+        self.fc_A = nn.Sequential(*[nn.Linear(output_ndf, output_nc)])  # 这是不是也要搞出来μ和var啊，这两个都是8维的
         self.fcVar_A = nn.Sequential(*[nn.Linear(output_ndf, output_nc)])
         self.conv_A = nn.Sequential(*conv_layers_A)
 
@@ -238,15 +303,15 @@ class E_attr_concat(nn.Module):
         self.conv_B = nn.Sequential(*conv_layers_B)
 
     def forward(self, xa, xb):
-        x_conv_A = self.conv_A(xa)
-        conv_flat_A = x_conv_A.view(xa.size(0), -1)
-        output_A = self.fc_A(conv_flat_A)
-        outputVar_A = self.fcVar_A(conv_flat_A)
+        x_conv_A = self.conv_A(xa)  # 这里出来变成了(256,1,1)
+        conv_flat_A = x_conv_A.view(xa.size(0), -1)  # (256,)
+        output_A = self.fc_A(conv_flat_A)  # (8,)
+        outputVar_A = self.fcVar_A(conv_flat_A)  # (8,)
         x_conv_B = self.conv_B(xb)
         conv_flat_B = x_conv_B.view(xb.size(0), -1)
         output_B = self.fc_B(conv_flat_B)
         outputVar_B = self.fcVar_B(conv_flat_B)
-        return output_A, outputVar_A, output_B, outputVar_B
+        return output_A, outputVar_A, output_B, outputVar_B  # 所以，输入是图像，输出是8维的μ和var
 
     def forward_a(self, xa):
         x_conv_A = self.conv_A(xa)
@@ -266,11 +331,20 @@ class E_attr_concat(nn.Module):
 ####################################################################
 # --------------------------- Generators ----------------------------
 ####################################################################
+'''
+    decA1~decA4
+        MisINSResBlock: 这个模块把一个feature map和一个vector(expand + conc)融合起来，得到了一个同样通道的feature map
+    decA5
+        ReLUINSConvTranspose2d: 转置卷积 -> LayerNorm -> ReLU
+        程序里从256通道变到128通道，最后变到 output_dim = 3 通道，再加Tanh激活
+'''
+
+
 class G(nn.Module):
     def __init__(self, output_dim_a, output_dim_b, nz):
         super(G, self).__init__()
         self.nz = nz
-        ini_tch = 256
+        ini_tch = 256  # 暂时搞不懂这几个变量，总之目前都是256
         tch_add = ini_tch
         tch = ini_tch
         self.tch_add = tch_add
@@ -317,10 +391,10 @@ class G(nn.Module):
         return
 
     def forward_a(self, x, z):
-        z = self.mlpA(z)
-        z1, z2, z3, z4 = torch.split(z, self.tch_add, dim=1)
+        z = self.mlpA(z)  # z: 8 -> 256 -> 256 -> 1024
+        z1, z2, z3, z4 = torch.split(z, self.tch_add, dim=1)  # 这句话意思是按照z的第一个维度进行切分，每256个下标成一组，共4组
         z1, z2, z3, z4 = z1.contiguous(), z2.contiguous(), z3.contiguous(), z4.contiguous()
-        out1 = self.decA1(x, z1)
+        out1 = self.decA1(x, z1)  # 这里面，相当于把特征图x，【依次】与z的不同成分进行混合，得到与x尺寸相同的家伙
         out2 = self.decA2(out1, z2)
         out3 = self.decA3(out2, z3)
         out4 = self.decA4(out3, z4)
@@ -339,26 +413,45 @@ class G(nn.Module):
         return out
 
 
+'''
+    dec_share:  256,h,w -> 256,h,w
+        conv3@256 {IN ReLU conv3@256 IN Dropout} Residual
+    decA1:      264,h,w -> 264,h,w
+        3* {conv3@256 {IN ReLU conv3@256 IN Dropout} Residual}
+    decA2:      272,h,w -> 136,h,w
+        ReLUINSConvTranspose2d: 转置卷积 -> LayerNorm -> ReLU
+    decA3:      144,h,w ->  72,h,w
+        ReLUINSConvTranspose2d: 转置卷积 -> LayerNorm -> ReLU
+    decA4:       80,h,w ->   3,h,w
+        转置卷积 + Tanh
+'''
+
+
 class G_concat(nn.Module):
     def __init__(self, output_dim_a, output_dim_b, nz):
         super(G_concat, self).__init__()
-        self.nz = nz
+        self.nz = nz  # 这个东西估计实际用的是8
         tch = 256
         dec_share = []
         dec_share += [INSResBlock(tch, tch)]
         self.dec_share = nn.Sequential(*dec_share)
-        tch = 256 + self.nz
+
+        tch = 256 + self.nz  # 256 + 8 = 264
         decA1 = []
         for i in range(0, 3):
             decA1 += [INSResBlock(tch, tch)]
-        tch = tch + self.nz
+
+        tch = tch + self.nz  # 264 + 8 = 272
         decA2 = ReLUINSConvTranspose2d(tch, tch // 2, kernel_size=3, stride=2, padding=1, output_padding=1)
-        tch = tch // 2
-        tch = tch + self.nz
+
+        tch = tch // 2  # 272 / 2 = 136
+        tch = tch + self.nz  # 136 + 8 = 144
         decA3 = ReLUINSConvTranspose2d(tch, tch // 2, kernel_size=3, stride=2, padding=1, output_padding=1)
-        tch = tch // 2
-        tch = tch + self.nz
+
+        tch = tch // 2  # 144 / 2 = 72
+        tch = tch + self.nz  # 72 + 8 = 80
         decA4 = [nn.ConvTranspose2d(tch, output_dim_a, kernel_size=1, stride=1, padding=0)] + [nn.Tanh()]
+
         self.decA1 = nn.Sequential(*decA1)
         self.decA2 = nn.Sequential(*[decA2])
         self.decA3 = nn.Sequential(*[decA3])
@@ -431,6 +524,7 @@ def get_scheduler(optimizer, opts, cur_ep=-1):
     return scheduler
 
 
+#   均值池化+1x1conv
 def meanpoolConv(inplanes, outplanes):
     sequence = []
     sequence += [nn.AvgPool2d(kernel_size=2, stride=2)]
@@ -438,6 +532,7 @@ def meanpoolConv(inplanes, outplanes):
     return nn.Sequential(*sequence)
 
 
+#   3x3的conv+均值池化
 def convMeanpool(inplanes, outplanes):
     sequence = []
     sequence += conv3x3(inplanes, outplanes)
@@ -445,6 +540,7 @@ def convMeanpool(inplanes, outplanes):
     return nn.Sequential(*sequence)
 
 
+#   得到一个归一化层，类型可以是IN或者BN
 def get_norm_layer(layer_type='instance'):
     if layer_type == 'batch':
         norm_layer = functools.partial(nn.BatchNorm2d, affine=True)
@@ -457,6 +553,7 @@ def get_norm_layer(layer_type='instance'):
     return norm_layer
 
 
+#   得到一个非线性层，
 def get_non_linearity(layer_type='relu'):
     if layer_type == 'relu':
         nl_layer = functools.partial(nn.ReLU, inplace=True)
@@ -469,6 +566,7 @@ def get_non_linearity(layer_type='relu'):
     return nl_layer
 
 
+#   正常的3x3卷积
 def conv3x3(in_planes, out_planes):
     return [nn.ReflectionPad2d(1), nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=1, padding=0, bias=True)]
 
@@ -503,6 +601,13 @@ class LayerNorm(nn.Module):
             return F.layer_norm(x, normalized_shape)
 
 
+'''
+    基本模块：
+        归一化+非线性+3x3卷积（in_channel）+归一化+非线性+conv（out_channel）+meanpool
+        残差连接（in_channel-> meanpool+conv -> out_channel）
+'''
+
+
 class BasicBlock(nn.Module):
     def __init__(self, inplanes, outplanes, norm_layer=None, nl_layer=None):
         super(BasicBlock, self).__init__()
@@ -523,6 +628,13 @@ class BasicBlock(nn.Module):
         return out
 
 
+'''
+    卷积 n_in -> n_out （可能有谱归一化）
+    （可能有IN）
+    LeakyReLU
+'''
+
+
 class LeakyReLUConv2d(nn.Module):
     def __init__(self, n_in, n_out, kernel_size, stride, padding=0, norm='None', sn=False):
         super(LeakyReLUConv2d, self).__init__()
@@ -533,7 +645,7 @@ class LeakyReLUConv2d(nn.Module):
                 spectral_norm(nn.Conv2d(n_in, n_out, kernel_size=kernel_size, stride=stride, padding=0, bias=True))]
         else:
             model += [nn.Conv2d(n_in, n_out, kernel_size=kernel_size, stride=stride, padding=0, bias=True)]
-        if 'norm' == 'Instance':
+        if norm == 'Instance':
             model += [nn.InstanceNorm2d(n_out, affine=False)]
         model += [nn.LeakyReLU(inplace=True)]
         self.model = nn.Sequential(*model)
@@ -542,6 +654,13 @@ class LeakyReLUConv2d(nn.Module):
 
     def forward(self, x):
         return self.model(x)
+
+
+'''
+    Conv: n_in -> n_out
+    IN
+    ReLU
+'''
 
 
 class ReLUINSConv2d(nn.Module):
@@ -557,6 +676,17 @@ class ReLUINSConv2d(nn.Module):
 
     def forward(self, x):
         return self.model(x)
+
+
+'''
+    3x3 conv: inplanes -> planes
+    IN
+    ReLU
+    3x3 conv: planes -> planes
+    IN
+    [Dropout]
+    Residual 这里有问题把，除非inplanes和out_planes一致，否则加不起来！
+'''
 
 
 class INSResBlock(nn.Module):
@@ -583,12 +713,22 @@ class INSResBlock(nn.Module):
         return out
 
 
+#   这个模块的作用，似乎是把一个向量和一个特征图融合在一起
 class MisINSResBlock(nn.Module):
     def conv3x3(self, dim_in, dim_out, stride=1):
         return nn.Sequential(nn.ReflectionPad2d(1), nn.Conv2d(dim_in, dim_out, kernel_size=3, stride=stride))
 
     def conv1x1(self, dim_in, dim_out):
         return nn.Conv2d(dim_in, dim_out, kernel_size=1, stride=1, padding=0)
+
+    '''
+        conv3@dim + IN (NO ReLU)
+        conv3@dim + IN (NO ReLU)
+
+        conv1@Σdim + ReLU + conv1@dim + ReLU
+        conv1@Σdim + ReLU + conv1@dim + ReLU
+
+    '''
 
     def __init__(self, dim, dim_extra, stride=1, dropout=0.0):
         super(MisINSResBlock, self).__init__()
@@ -598,6 +738,7 @@ class MisINSResBlock(nn.Module):
         self.conv2 = nn.Sequential(
             self.conv3x3(dim, dim, stride),
             nn.InstanceNorm2d(dim))
+
         self.blk1 = nn.Sequential(
             self.conv1x1(dim + dim_extra, dim + dim_extra),
             nn.ReLU(inplace=False),
@@ -618,14 +759,17 @@ class MisINSResBlock(nn.Module):
         self.blk1.apply(gaussian_weights_init)
         self.blk2.apply(gaussian_weights_init)
 
+    #   这里面，z可能是b,c的，首先扩充为b,c,1,1，然后再扩充成和x的size一样，变成b,c,h,w
+    #   residual 记录 x
+    #   cat (x -> conv, z = (b,d,h,w)) -> o2 -> conv1 ReLU conv1 ReLU -> o3
     def forward(self, x, z):
-        residual = x
-        z_expand = z.view(z.size(0), z.size(1), 1, 1).expand(z.size(0), z.size(1), x.size(2), x.size(3))
-        o1 = self.conv1(x)
-        o2 = self.blk1(torch.cat([o1, z_expand], dim=1))
-        o3 = self.conv2(o2)
-        out = self.blk2(torch.cat([o3, z_expand], dim=1))
-        out += residual
+        residual = x  # (b,d,h,w)
+        z_expand = z.view(z.size(0), z.size(1), 1, 1).expand(z.size(0), z.size(1), x.size(2), x.size(3))  # (b,c,h,w)
+        o1 = self.conv1(x)  # (b,dim,h,w)
+        o2 = self.blk1(torch.cat([o1, z_expand], dim=1))  # (b,dim+c,h,w) -> (b,dim,h,w)
+        o3 = self.conv2(o2)  # (b,dim,h,w)
+        out = self.blk2(torch.cat([o3, z_expand], dim=1))  # (b,dim+c,h,w) -> (b,dim,h,w)
+        out += residual  # 这里如果要相加，必须是dim = d，也就是说，送入的x的维度和模型内定义的dim一样
         return out
 
 
