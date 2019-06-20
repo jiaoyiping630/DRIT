@@ -54,7 +54,7 @@ class MultiScaleDis(nn.Module):
             norm：使用的归一化
             sn：是否使用谱归一化
             在最后一步，通过1x1的卷积，输出特征图的通道数也变为了1
-        真正的判别器是self.Diss，在前向传播时分别按1x，2x，4x降采样，然后送到三个不同分辨率的判别器中，并把输出并起来
+        真正的判别器是self.Diss，在前向传播时分别按1x，2x，4x降采样，然后送到三个不同分辨率的判别器中，并把输出并起来(一个list)
     '''
 
     def _make_net(self, ch, input_dim, n_layer, norm, sn):
