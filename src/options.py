@@ -1,12 +1,18 @@
 import argparse
 
+debug_mode=False
 
 class TrainOptions():
     def __init__(self):
         self.parser = argparse.ArgumentParser()
 
         # data loader related
-        self.parser.add_argument('--dataroot', type=str, required=True, help='path of data')
+        if debug_mode:
+            self.parser.add_argument('--dataroot', type=str,
+                                     default=r'G:\DIAG\Keep Calm and Read Code\DRIT-master\DRIT-master\datasets\cat2dog')
+        else:
+            self.parser.add_argument('--dataroot', type=str, required=True, help='path of data')
+
         self.parser.add_argument('--phase', type=str, default='train', help='phase for dataloading')
         self.parser.add_argument('--batch_size', type=int, default=2, help='batch size')
         self.parser.add_argument('--resize_size', type=int, default=256, help='resized image size for training')

@@ -5,12 +5,13 @@ import functools
 from torch.optim import lr_scheduler
 import torch.nn.functional as F
 
+debug_mode=False
 ####################################################################
 # ------------------------- Discriminators --------------------------
 ####################################################################
 '''
-    内容判别器，输入的是256x256，网络就是Conv2d+LeakyReLU+IN的堆叠，
-    这样看来，前向传播出来的结果好像就是一个向量，并不是true or false
+    内容判别器，输入的是b,256,54,54，网络就是Conv2d+LeakyReLU+IN的堆叠，
+    按照54这个尺寸来看，输出恰好是b,1,1,1，经过view以后变成了1的尺寸。这里面输出的是logit，在backward_contentD会手动加sigmoid
 '''
 
 
@@ -170,7 +171,7 @@ class E_content(nn.Module):
     def forward(self, xa, xb):
         outputA = self.convA(xa)    #   b,256,54,54
         outputB = self.convB(xb)
-        outputA = self.conv_share(outputA)
+        outputA = self.conv_share(outputA)  #   b,256,54,54
         outputB = self.conv_share(outputB)
         return outputA, outputB
 
@@ -302,8 +303,8 @@ class E_attr_concat(nn.Module):
         self.fcVar_B = nn.Sequential(*[nn.Linear(output_ndf, output_nc)])
         self.conv_B = nn.Sequential(*conv_layers_B)
 
-    def forward(self, xa, xb):
-        x_conv_A = self.conv_A(xa)  # 这里出来变成了(256,1,1)
+    def forward(self, xa, xb):  #   输入图像 1,3,216,216
+        x_conv_A = self.conv_A(xa)  # 这里出来变成了(1,256,1,1)
         conv_flat_A = x_conv_A.view(xa.size(0), -1)  # (256,)
         output_A = self.fc_A(conv_flat_A)  # (8,)
         outputVar_A = self.fcVar_A(conv_flat_A)  # (8,)
@@ -780,7 +781,10 @@ class GaussianNoiseLayer(nn.Module):
     def forward(self, x):
         if self.training == False:
             return x
-        noise = Variable(torch.randn(x.size()).cuda(x.get_device()))
+        if not debug_mode:
+            noise = Variable(torch.randn(x.size()).cuda(x.get_device()))
+        else:
+            noise = Variable(torch.randn(x.size()))
         return x + noise
 
 

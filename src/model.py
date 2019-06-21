@@ -2,6 +2,7 @@ import networks
 import torch
 import torch.nn as nn
 
+debug_mode=False
 
 class DRIT(nn.Module):
     def __init__(self, opts):
@@ -92,7 +93,10 @@ class DRIT(nn.Module):
         self.gen.cuda(self.gpu)
 
     def get_z_random(self, batchSize, nz, random_type='gauss'):
-        z = torch.randn(batchSize, nz).cuda(self.gpu)
+        if not debug_mode:
+            z = torch.randn(batchSize, nz).cuda(self.gpu)
+        else:
+            z = torch.randn(batchSize, nz)
         return z
 
     def test_forward(self, image, a2b=True):
@@ -126,23 +130,23 @@ class DRIT(nn.Module):
     def forward(self):
         # input images
         half_size = 1
-        real_A = self.input_A
+        real_A = self.input_A   #   真图A和真图B，均为2,3,216,216
         real_B = self.input_B
-        self.real_A_encoded = real_A[0:half_size]
+        self.real_A_encoded = real_A[0:half_size]   #   把这个batch里的两张图片一分为二
         self.real_A_random = real_A[half_size:]
         self.real_B_encoded = real_B[0:half_size]
         self.real_B_random = real_B[half_size:]
 
         # get encoded z_c
         self.z_content_a, self.z_content_b = self.enc_c.forward(self.real_A_encoded, self.real_B_encoded)
-
+        '''通过内容编码器，获得两张真图的内容编码，均为1,256,54,54'''
         # get encoded z_a
         if self.concat:
             self.mu_a, self.logvar_a, self.mu_b, self.logvar_b = self.enc_a.forward(self.real_A_encoded,
                                                                                     self.real_B_encoded)
             std_a = self.logvar_a.mul(0.5).exp_()
             eps_a = self.get_z_random(std_a.size(0), std_a.size(1), 'gauss')
-            self.z_attr_a = eps_a.mul(std_a).add_(self.mu_a)
+            self.z_attr_a = eps_a.mul(std_a).add_(self.mu_a)    #   这里其实就是引入随机性，把exp(sigmax0.5)乘以随机缩放eps，再加上均值
             std_b = self.logvar_b.mul(0.5).exp_()
             eps_b = self.get_z_random(std_b.size(0), std_b.size(1), 'gauss')
             self.z_attr_b = eps_b.mul(std_b).add_(self.mu_b)
@@ -230,6 +234,7 @@ class DRIT(nn.Module):
         '''
             batch_size默认的是两类各两张真图，在前向传播时候，各传播一张真A和真B的图，
             经过内容编码器enc_c，把结果存在self.z_content_a和self.z_content_b中
+            这里的内容编码，尺寸为1,256,54,54
         '''
         self.disContent_opt.zero_grad()
         loss_D_Content = self.backward_contentD(self.z_content_a, self.z_content_b)
@@ -297,14 +302,21 @@ class DRIT(nn.Module):
         loss_D.backward()
         return loss_D
 
+    '''
+        这里imageA和imageB都是内容图，b,256,54,54，由此处可见，内容编码器试图将真实的domainA分辨为0，将真实的domainB分辨为1
+    '''
     def backward_contentD(self, imageA, imageB):
         pred_fake = self.disContent.forward(imageA.detach())    #   将内容编码送给内容判别器，得到两个预测值
         pred_real = self.disContent.forward(imageB.detach())
-        for it, (out_a, out_b) in enumerate(zip(pred_fake, pred_real)):
-            out_fake = nn.functional.sigmoid(out_a)
-            out_real = nn.functional.sigmoid(out_b)
-            all1 = torch.ones((out_real.size(0))).cuda(self.gpu)
-            all0 = torch.zeros((out_fake.size(0))).cuda(self.gpu)
+        for it, (out_a, out_b) in enumerate(zip(pred_fake, pred_real)): #   在disContent里面，输出正好是list，所以这里可以zip
+            out_fake = nn.functional.sigmoid(out_a)     #   (1,)
+            out_real = nn.functional.sigmoid(out_b)     #   (1,)
+            if not debug_mode:
+                all1 = torch.ones((out_real.size(0))).cuda(self.gpu)
+                all0 = torch.zeros((out_fake.size(0))).cuda(self.gpu)
+            else:
+                all1 = torch.ones((out_real.size(0)))   #   (1,)
+                all0 = torch.zeros((out_fake.size(0)))  #   (1,)
             ad_true_loss = nn.functional.binary_cross_entropy(out_real, all1)
             ad_fake_loss = nn.functional.binary_cross_entropy(out_fake, all0)
         loss_D = ad_true_loss + ad_fake_loss
