@@ -466,28 +466,32 @@ class DRIT(nn.Module):
         return encoding_loss
 
     def resume(self, model_dir, train=True):
-        checkpoint = torch.load(model_dir)
-        # weight
-        if train:
-            self.disA.load_state_dict(checkpoint['disA'])
-            self.disA2.load_state_dict(checkpoint['disA2'])
-            self.disB.load_state_dict(checkpoint['disB'])
-            self.disB2.load_state_dict(checkpoint['disB2'])
-            self.disContent.load_state_dict(checkpoint['disContent'])
-        self.enc_c.load_state_dict(checkpoint['enc_c'])
-        self.enc_a.load_state_dict(checkpoint['enc_a'])
-        self.gen.load_state_dict(checkpoint['gen'])
-        # optimizer
-        if train:
-            self.disA_opt.load_state_dict(checkpoint['disA_opt'])
-            self.disA2_opt.load_state_dict(checkpoint['disA2_opt'])
-            self.disB_opt.load_state_dict(checkpoint['disB_opt'])
-            self.disB2_opt.load_state_dict(checkpoint['disB2_opt'])
-            self.disContent_opt.load_state_dict(checkpoint['disContent_opt'])
-            self.enc_c_opt.load_state_dict(checkpoint['enc_c_opt'])
-            self.enc_a_opt.load_state_dict(checkpoint['enc_a_opt'])
-            self.gen_opt.load_state_dict(checkpoint['gen_opt'])
-        return checkpoint['ep'], checkpoint['total_it']
+        try:
+            checkpoint = torch.load(model_dir)
+            # weight
+            if train:
+                self.disA.load_state_dict(checkpoint['disA'])
+                self.disA2.load_state_dict(checkpoint['disA2'])
+                self.disB.load_state_dict(checkpoint['disB'])
+                self.disB2.load_state_dict(checkpoint['disB2'])
+                self.disContent.load_state_dict(checkpoint['disContent'])
+            self.enc_c.load_state_dict(checkpoint['enc_c'])
+            self.enc_a.load_state_dict(checkpoint['enc_a'])
+            self.gen.load_state_dict(checkpoint['gen'])
+            # optimizer
+            if train:
+                self.disA_opt.load_state_dict(checkpoint['disA_opt'])
+                self.disA2_opt.load_state_dict(checkpoint['disA2_opt'])
+                self.disB_opt.load_state_dict(checkpoint['disB_opt'])
+                self.disB2_opt.load_state_dict(checkpoint['disB2_opt'])
+                self.disContent_opt.load_state_dict(checkpoint['disContent_opt'])
+                self.enc_c_opt.load_state_dict(checkpoint['enc_c_opt'])
+                self.enc_a_opt.load_state_dict(checkpoint['enc_a_opt'])
+                self.gen_opt.load_state_dict(checkpoint['gen_opt'])
+            return checkpoint['ep'], checkpoint['total_it']
+        except:
+            print('Fail to resume training!')
+            return 0,0
 
     def save(self, filename, ep, total_it):
         state = {

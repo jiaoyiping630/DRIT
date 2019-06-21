@@ -8,7 +8,7 @@ from saver import Saver
 
 def main():
 
-    debug_mode=True
+    debug_mode=False
 
     # parse options
     parser = TrainOptions()
